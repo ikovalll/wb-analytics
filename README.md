@@ -107,7 +107,6 @@ wb/styling.py    внешний вид листов
 ## Тесты
 
 ```bash
-.venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest
 .venv/bin/python -m pytest --cov=wb --cov-report=term-missing   # с покрытием
 .venv/bin/ruff check wb *.py tests                              # линтер
