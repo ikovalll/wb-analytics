@@ -1,0 +1,10 @@
+.env
+.venv/
+service_account.json
+data/
+__pycache__/
+*.py[cod]
+.DS_Store
+.pytest_cache/
+.coverage
+.ruff_cache/
