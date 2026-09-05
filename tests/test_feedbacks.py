@@ -15,20 +15,29 @@ BASE = "https://feedbacks"
 
 
 def raw_feedback(
-    feedback_id, *, rating=5, text="", pros="", cons="", nm_id=1, answer=None
+    feedback_id,
+    *,
+    rating=5,
+    text="",
+    pros="",
+    cons="",
+    nm_id=1,
+    answer=None,
+    size="",
+    **extra,
 ):
     """Отзыв в том виде, в каком его отдаёт API."""
     return {
         "id": feedback_id,
-        "productDetails": {"nmId": nm_id},
+        "productDetails": {"nmId": nm_id, "size": size},
         "createdDate": "2026-01-01T00:00:00Z",
         "productValuation": rating,
         "text": text,
         "pros": pros,
         "cons": cons,
         "userName": "Покупатель",
-        "size": "",
         "answer": answer,
+        **extra,
     }
 
 
@@ -69,6 +78,26 @@ def test_отзыв_с_ответом_продавца_помечается():
     feedback = Feedback.from_api(raw_feedback("a1", answer={"text": "Спасибо"}))
 
     assert feedback.is_answered is True
+    assert feedback.answer == "Спасибо"
+
+
+def test_размер_берётся_из_вложенного_блока():
+    """На верхнем уровне поля size нет, оно внутри productDetails."""
+    feedback = Feedback.from_api(raw_feedback("a1", size="4 Ач · 21 В"))
+
+    assert feedback.size == "4 Ач · 21 В"
+
+
+def test_вложения_и_статус_заказа_сохраняются():
+    feedback = Feedback.from_api(
+        raw_feedback(
+            "a1", photoLinks=[{"fullSize": "http://..."}], orderStatus="return"
+        )
+    )
+
+    assert feedback.has_photo is True
+    assert feedback.has_video is False
+    assert feedback.order_status == "return"
 
 
 def test_пустые_поля_не_ломают_разбор():

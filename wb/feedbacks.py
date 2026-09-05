@@ -26,12 +26,17 @@ class Feedback:
     cons: str
     user_name: str
     size: str
-    is_answered: bool
+    color: str
+    order_status: str
+    has_photo: bool
+    has_video: bool
+    answer: str
 
     @classmethod
     def from_api(cls, raw: dict[str, Any]) -> Feedback:
         """Собрать отзыв из ответа API."""
         details = raw.get("productDetails") or {}
+        answer = raw.get("answer") or {}
         return cls(
             id=raw.get("id", ""),
             nm_id=details.get("nmId", 0),
@@ -41,14 +46,24 @@ class Feedback:
             pros=(raw.get("pros") or "").strip(),
             cons=(raw.get("cons") or "").strip(),
             user_name=(raw.get("userName") or "").strip(),
-            size=(raw.get("size") or "").strip(),
-            is_answered=bool(raw.get("answer")),
+            # Размер лежит внутри productDetails, на верхнем уровне его нет.
+            size=(details.get("size") or "").strip(),
+            color=(raw.get("color") or "").strip(),
+            order_status=(raw.get("orderStatus") or "").strip(),
+            has_photo=bool(raw.get("photoLinks")),
+            has_video=bool(raw.get("video")),
+            answer=(answer.get("text") or "").strip(),
         )
 
     @property
     def is_empty(self) -> bool:
         """Оценка есть, текста нет."""
         return not (self.text or self.pros or self.cons)
+
+    @property
+    def is_answered(self) -> bool:
+        """Продавец ответил на отзыв."""
+        return bool(self.answer)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)

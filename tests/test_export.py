@@ -20,7 +20,11 @@ def feedback(feedback_id, rating, text=""):
         cons="",
         user_name="Покупатель",
         size="",
-        is_answered=False,
+        color="",
+        order_status="buyout",
+        has_photo=False,
+        has_video=False,
+        answer="",
     )
 
 

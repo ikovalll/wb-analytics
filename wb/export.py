@@ -20,7 +20,11 @@ CSV_COLUMNS = (
     "cons",
     "user_name",
     "size",
-    "is_answered",
+    "color",
+    "order_status",
+    "has_photo",
+    "has_video",
+    "answer",
 )
 
 
