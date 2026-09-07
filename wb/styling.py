@@ -327,20 +327,24 @@ def _borders(sheet_id, first_row, last_row, columns, *, bottom: str) -> dict:
 
 
 def _banding(sheet_id, last_row, columns) -> dict:
+    """Чередование строк только под шапкой.
+
+    Полосы перекрывают заливку ячеек, поэтому диапазон начинается с данных:
+    иначе вторая строка шапки становится белой, а текст на ней белый.
+    """
     return {
         "addBanding": {
             "bandedRange": {
                 "range": {
                     "sheetId": sheet_id,
-                    "startRowIndex": 0,
+                    "startRowIndex": HEADER_ROWS,
                     "endRowIndex": last_row,
                     "startColumnIndex": 0,
                     "endColumnIndex": columns,
                 },
                 "rowProperties": {
-                    "headerColor": HEADER_COLOR,
-                    "firstBandColor": WHITE,
-                    "secondBandColor": BAND_COLOR,
+                    "firstBandColor": BAND_COLOR,
+                    "secondBandColor": WHITE,
                 },
             }
         }

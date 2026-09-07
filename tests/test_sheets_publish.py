@@ -225,6 +225,17 @@ def test_строки_чередуются_подсветкой(published):
     assert len(banding) == 2, "по одному диапазону на лист"
 
 
+def test_подсветка_не_заходит_на_шапку(published):
+    """Полосы перекрывают заливку: под ними шапка стала бы белой на белом."""
+    ranges = [
+        request["addBanding"]["bandedRange"]["range"]
+        for request in published.requests
+        if "addBanding" in request
+    ]
+
+    assert all(r["startRowIndex"] == 2 for r in ranges)
+
+
 def test_повторная_публикация_не_плодит_листы(published):
     publish(published, [product(1)], raw_title="Сырые данные", report_title="Отчёт")
 
