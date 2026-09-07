@@ -21,34 +21,54 @@ logger = logging.getLogger(__name__)
 
 SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
 
-RAW_HEADER = (
+#: Шапка занимает две строки: верхняя группирует колонки, нижняя уточняет.
+HEADER_ROWS = 2
+FIRST_DATA_ROW = HEADER_ROWS + 1  # номер строки в таблице, считая с единицы
+
+RAW_HEADER_TOP = (
     "Артикул",
     "Товар",
     "Дата",
     "Показы",
     "В корзину",
-    "Заказы, шт",
-    "Заказы, ₽",
-    "Выкупы, шт",
-    "Выкупы, ₽",
+    "Заказы",
+    "",
+    "Выкупы",
+    "",
     "В избранное",
-    "CR, %",
+    "CR",
 )
+RAW_HEADER_SUB = ("", "", "", "", "", "шт.", "Сумма", "шт.", "Сумма", "", "")
 
-METRICS_HEADER = (
+REPORT_HEADER_TOP = (
     "Артикул",
     "Товар",
     "Показы",
     "В корзину",
-    "Заказы, шт",
-    "Сумма заказов, ₽",
-    "Выкупы, шт",
-    "Сумма выкупов, ₽",
-    "CR средний",
-    "CR минимальный",
-    "CR максимальный",
-    "Средний чек по выкупам, ₽",
-    "Средний чек по заказам, ₽",
+    "Заказы",
+    "",
+    "Выкупы",
+    "",
+    "CR",
+    "",
+    "",
+    "Средний чек",
+    "",
+)
+REPORT_HEADER_SUB = (
+    "",
+    "",
+    "",
+    "",
+    "шт.",
+    "Сумма",
+    "шт.",
+    "Сумма",
+    "Средний",
+    "Мин",
+    "Макс",
+    "Выкупы",
+    "Заказы",
 )
 
 #: Разделитель аргументов в формулах; соответствует локали, которую
@@ -82,13 +102,18 @@ def publish(
     _set_locale(spreadsheet)
 
     ordered = sorted(products, key=_buyout_sum, reverse=True)
-    raw_rows = _raw_rows(products)
-    report_rows = _report_rows(ordered, raw_title, data_rows=len(raw_rows) - 1)
+    blocks = _blocks(products)
 
-    raw = _write(spreadsheet, raw_title, raw_rows)
-    report = _write(spreadsheet, report_title, report_rows)
+    raw = _write(spreadsheet, raw_title, _raw_rows(products))
+    report = _write(spreadsheet, report_title, _report_rows(ordered, raw_title, blocks))
 
-    styling.apply(spreadsheet, raw, report, last_row=len(report_rows))
+    styling.apply(
+        spreadsheet,
+        raw,
+        report,
+        raw_blocks=[(start, end) for start, end in blocks.values()],
+        report_rows=len(ordered),
+    )
     _drop_stale_sheets(spreadsheet, {raw_title, report_title})
 
 
@@ -115,17 +140,32 @@ def _write(
 # --- содержимое листов ---------------------------------------------------
 
 
+def _blocks(products: Sequence[ProductFunnel]) -> dict[int, tuple[int, int]]:
+    """Границы строк каждого товара на листе сырых данных, считая с единицы."""
+    bounds: dict[int, tuple[int, int]] = {}
+    row = FIRST_DATA_ROW
+    for product in products:
+        bounds[product.nm_id] = (row, row + len(product.days) - 1)
+        row += len(product.days)
+    return bounds
+
+
 def _raw_rows(products: Sequence[ProductFunnel]) -> list[list[object]]:
-    """Строки листа сырых данных: артикул × день."""
-    rows: list[list[object]] = [list(RAW_HEADER)]
-    line = 2  # первая строка данных в таблице
+    """Строки листа сырых данных: артикул × день.
+
+    Артикул и название заполняются только в первой строке блока: остальные
+    ячейки колонки объединяются с ней при оформлении.
+    """
+    rows: list[list[object]] = [list(RAW_HEADER_TOP), list(RAW_HEADER_SUB)]
+    line = FIRST_DATA_ROW
 
     for product in products:
-        for day in product.days:
+        for index, day in enumerate(product.days):
+            first = index == 0
             rows.append(
                 [
-                    product.nm_id,
-                    product.title,
+                    product.nm_id if first else "",
+                    product.title if first else "",
                     day.date,
                     day.open_count,
                     day.cart_count,
@@ -141,48 +181,47 @@ def _raw_rows(products: Sequence[ProductFunnel]) -> list[list[object]]:
     return rows
 
 
-#: Строка, с которой начинаются данные на листе отчёта.
-FIRST_REPORT_ROW = 2
-
-
 def _report_rows(
     products: Sequence[ProductFunnel],
     raw_title: str,
-    *,
-    data_rows: int,
+    blocks: dict[int, tuple[int, int]],
 ) -> list[list[object]]:
     """Показатели по артикулам — формулами по листу сырых данных.
 
-    Товары приходят уже упорядоченными, сортировать внутри таблицы нечего.
+    Суммы считаются по диапазону строк товара, а не через SUMIFS с отбором
+    по колонке артикула: в ней объединённые ячейки, и отбор нашёл бы только
+    первый день каждого блока.
     """
-    raw = f"'{raw_title}'!"
-    last = data_rows + 1
-    ids = f"{raw}$A$2:$A${last}"
-    cr = f"{raw}$K$2:$K${last}"
+    rows: list[list[object]] = [list(REPORT_HEADER_TOP), list(REPORT_HEADER_SUB)]
 
-    def total(column: str, line: int) -> str:
-        return f"=SUMIFS({raw}${column}$2:${column}${last}{SEP}{ids}{SEP}$A{line})"
-
-    rows: list[list[object]] = [list(METRICS_HEADER)]
-    for index, product in enumerate(products, start=FIRST_REPORT_ROW):
+    for index, product in enumerate(products, start=FIRST_DATA_ROW):
+        block = blocks[product.nm_id]
         rows.append(
             [
                 product.nm_id,
                 product.title,
-                total("D", index),  # показы
-                total("E", index),  # в корзину
-                total("F", index),  # заказы, шт
-                total("G", index),  # заказы, ₽
-                total("H", index),  # выкупы, шт
-                total("I", index),  # выкупы, ₽
-                f"=AVERAGEIFS({cr}{SEP}{ids}{SEP}$A{index})",
-                f"=MINIFS({cr}{SEP}{ids}{SEP}$A{index})",
-                f"=MAXIFS({cr}{SEP}{ids}{SEP}$A{index})",
+                _over(raw_title, "D", block),
+                _over(raw_title, "E", block),
+                _over(raw_title, "F", block),
+                _over(raw_title, "G", block),
+                _over(raw_title, "H", block),
+                _over(raw_title, "I", block),
+                _over(raw_title, "K", block, "AVERAGE"),
+                _over(raw_title, "K", block, "MIN"),
+                _over(raw_title, "K", block, "MAX"),
                 f"=IFERROR(H{index}/G{index}{SEP}0)",
                 f"=IFERROR(F{index}/E{index}{SEP}0)",
             ]
         )
     return rows
+
+
+def _over(
+    raw_title: str, column: str, block: tuple[int, int], function: str = "SUM"
+) -> str:
+    """Формула по колонке в пределах строк одного товара."""
+    start, end = block
+    return f"={function}('{raw_title}'!{column}{start}:{column}{end})"
 
 
 def _buyout_sum(product: ProductFunnel) -> int:

@@ -78,7 +78,7 @@ def day(date_str, buyout_sum=25_000):
     )
 
 
-def product(nm_id, buyout_sum=25_000):
+def product(nm_id, buyout_sum=25_000, days=2):
     return ProductFunnel(
         nm_id=nm_id,
         title=f"Товар {nm_id}",
@@ -86,7 +86,7 @@ def product(nm_id, buyout_sum=25_000):
         brand_name="b",
         subject_name="s",
         currency="RUB",
-        days=(day("2026-09-01", buyout_sum),),
+        days=tuple(day(f"2026-09-0{n + 1}", buyout_sum) for n in range(days)),
     )
 
 
@@ -128,26 +128,48 @@ def test_формулы_пишутся_как_формулы(published):
 def test_строки_отчёта_отсортированы_по_сумме_выкупов(published):
     rows = sheet(published, "Отчёт").written
 
-    assert [row[0] for row in rows[1:]] == [2, 3, 1]
+    assert [row[0] for row in rows[2:]] == [2, 3, 1]
 
 
 def test_сырые_данные_идут_в_порядке_запроса(published):
     """Сырьё не переставляем: это снимок ответа API, а не отчёт."""
     rows = sheet(published, "Сырые данные").written
 
-    assert [row[0] for row in rows[1:]] == [1, 2, 3]
+    assert [row[0] for row in rows[2:] if row[0]] == [1, 2, 3]
 
 
 def test_листы_создаются_ровно_под_данные(published):
     """Лист по умолчанию приходит с тысячей пустых строк под таблицей."""
-    assert sheet(published, "Сырые данные").size == (1 + 3, 11)
-    assert sheet(published, "Отчёт").size == (1 + 3, 13)
+    assert sheet(published, "Сырые данные").size == (2 + 6, 11), "шапка и 3×2 дня"
+    assert sheet(published, "Отчёт").size == (2 + 3, 13)
 
 
-def test_в_отчёте_нет_заголовочной_строки(published):
+def test_шапка_занимает_две_строки(published):
     rows = sheet(published, "Отчёт").written
 
-    assert rows[0][0] == "Артикул", "шапка идёт первой строкой"
+    assert rows[0][0] == "Артикул"
+    assert rows[1][4] == "шт."
+
+
+def test_ячейки_артикула_объединяются_по_дням(published):
+    """Каждый товар занимает несколько строк, артикул показан один раз."""
+    merges = [
+        request["mergeCells"]["range"]
+        for request in published.requests
+        if "mergeCells" in request
+    ]
+    product_merges = [
+        m for m in merges if m["startColumnIndex"] == 0 and m["startRowIndex"] >= 2
+    ]
+
+    assert len(product_merges) == 3, "по одному объединению на товар"
+    assert all(m["endRowIndex"] - m["startRowIndex"] == 2 for m in product_merges)
+
+
+def test_у_таблиц_есть_рамки(published):
+    borders = [r for r in published.requests if "updateBorders" in r]
+
+    assert len(borders) == 4, "шапка и данные на каждом из двух листов"
 
 
 def test_пустой_лист_удаляется(published):
@@ -172,19 +194,6 @@ def test_чужой_непустой_лист_не_трогаем():
     assert "Мои заметки" not in spreadsheet.deleted
 
 
-def test_шапка_закрепляется(published):
-    frozen = {
-        request["updateSheetProperties"]["properties"]["sheetId"]: request[
-            "updateSheetProperties"
-        ]["properties"]["gridProperties"]["frozenRowCount"]
-        for request in published.requests
-        if "updateSheetProperties" in request
-    }
-
-    assert frozen[sheet(published, "Сырые данные").id] == 1
-    assert frozen[sheet(published, "Отчёт").id] == 1
-
-
 def test_суммы_форматируются_с_разделителями(published):
     """Без группировки миллион нечитаем: 1843 650 вместо 1 843 650."""
     patterns = {
@@ -193,7 +202,7 @@ def test_суммы_форматируются_с_разделителями(pub
         if "numberFormat" in str(request.get("repeatCell", {}))
     }
 
-    assert patterns == {"#,##0", "#,##0 \\₽", "0.00%"}
+    assert patterns == {"#,##0", "#,##0 \\₽", "0.00%", "yyyy-mm-dd"}
 
 
 def test_ширины_колонок_задаются_явно(published):
@@ -201,7 +210,10 @@ def test_ширины_колонок_задаются_явно(published):
     widths = [
         request["updateDimensionProperties"]
         for request in published.requests
-        if "updateDimensionProperties" in request
+        if request.get("updateDimensionProperties", {})
+        .get("range", {})
+        .get("dimension")
+        == "COLUMNS"
     ]
 
     assert len(widths) == len(RAW_WIDTHS) + len(REPORT_WIDTHS)

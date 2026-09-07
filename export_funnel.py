@@ -23,9 +23,22 @@ from pathlib import Path
 from wb.client import WildberriesClient, WildberriesError
 from wb.config import ConfigError, Settings, load_settings
 from wb.funnel import Period, ProductFunnel, fetch_funnel
-from wb.sheets import RAW_HEADER
 
 logger = logging.getLogger("export_funnel")
+
+#: Шапка плоского CSV. В таблице она двухуровневая, здесь — одной строкой.
+CSV_HEADER = (
+    "Артикул",
+    "Товар",
+    "Дата",
+    "Показы",
+    "В корзину",
+    "Заказы, шт",
+    "Заказы, ₽",
+    "Выкупы, шт",
+    "Выкупы, ₽",
+    "В избранное",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -147,7 +160,7 @@ def _dump(products: Sequence[ProductFunnel], data_dir: Path) -> None:
     csv_path = data_dir / "funnel.csv"
     with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.writer(handle, delimiter=";")
-        writer.writerow(RAW_HEADER[:-1])  # без колонки CR: она формула в таблице
+        writer.writerow(CSV_HEADER)  # без колонки CR: она формула в таблице
         for product in products:
             for day in product.days:
                 writer.writerow(

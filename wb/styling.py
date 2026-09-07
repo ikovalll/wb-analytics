@@ -1,21 +1,36 @@
-"""Внешний вид листов Google Таблицы: шапка, ширины, полосы, форматы чисел."""
+"""Внешний вид листов Google Таблицы: шапка, ширины, объединения, рамки."""
 
 from __future__ import annotations
 
 import gspread
 
+HEADER_ROWS = 2
+
 #: Ширины колонок в пикселях. Заданы явно, а не автоподбором: длинные
 #: названия товаров иначе растягивают колонку на пол-экрана.
-RAW_WIDTHS = (110, 300, 100, 90, 100, 100, 130, 100, 130, 110, 90)
-REPORT_WIDTHS = (110, 300, 100, 110, 110, 150, 110, 150, 110, 130, 130, 170, 170)
+RAW_WIDTHS = (110, 432, 73, 71, 100, 100, 102, 100, 88, 102, 90)
+REPORT_WIDTHS = (85, 293, 85, 85, 85, 85, 85, 85, 85, 85, 85, 85, 85)
 
-HEADER_COLOR = {"red": 0.18, "green": 0.25, "blue": 0.33}
-BAND_COLOR = {"red": 0.96, "green": 0.96, "blue": 0.97}
+#: Колонки верхней шапки, объединённые по горизонтали: (первая, последняя+1).
+RAW_GROUPS = ((5, 7), (7, 9))
+REPORT_GROUPS = ((4, 6), (6, 8), (8, 11), (11, 13))
+
+#: Колонки без подзаголовка — их шапка объединяется по вертикали.
+RAW_SINGLE = (0, 1, 2, 3, 4, 9, 10)
+REPORT_SINGLE = (0, 1, 2, 3)
+
+HEADER_HEIGHT = 38
+ROW_HEIGHT = 21
+
+HEADER_COLOR = {"red": 0.176, "green": 0.247, "blue": 0.329}
+BAND_COLOR = {"red": 0.957, "green": 0.957, "blue": 0.969}
 WHITE = {"red": 1.0, "green": 1.0, "blue": 1.0}
 
+FONT = "Arial"
 COUNT = "#,##0"
 MONEY = "#,##0 \\₽"
 PERCENT = "0.00%"
+DATE = "yyyy-mm-dd"
 
 
 def apply(
@@ -23,79 +38,129 @@ def apply(
     raw: gspread.Worksheet,
     report: gspread.Worksheet,
     *,
-    last_row: int,
+    raw_blocks: list[tuple[int, int]],
+    report_rows: int,
 ) -> None:
     """Оформить оба листа одним пакетом запросов.
 
     Внешний вид задаётся только здесь: листы пересоздаются при каждом
     запуске, и ручные настройки следующий прогон не переживут.
     """
-
-    def raw_columns(columns: str, pattern: str) -> dict:
-        return _number_format(raw, columns, pattern, first_row=1)
-
-    def report_columns(columns: str, pattern: str) -> dict:
-        return _number_format(report, columns, pattern, first_row=1, last_row=last_row)
+    raw_rows = sum(end - start + 1 for start, end in raw_blocks)
 
     requests = [
-        *_layout(raw, header_row=0, widths=RAW_WIDTHS, frozen=1),
-        raw_columns("D:F", COUNT),
-        raw_columns("G", MONEY),
-        raw_columns("H", COUNT),
-        raw_columns("I", MONEY),
-        raw_columns("J", COUNT),
-        raw_columns("K", PERCENT),
-        *_layout(report, header_row=0, widths=REPORT_WIDTHS, frozen=1),
-        report_columns("C:E", COUNT),
-        report_columns("F", MONEY),
-        report_columns("G", COUNT),
-        report_columns("H", MONEY),
-        report_columns("I:K", PERCENT),
-        report_columns("L:M", MONEY),
+        *_sheet(
+            raw,
+            widths=RAW_WIDTHS,
+            data_rows=raw_rows,
+            groups=RAW_GROUPS,
+            single=RAW_SINGLE,
+        ),
+        *_raw_columns(raw, raw_rows),
+        *_product_merges(raw, raw_blocks),
+        *_sheet(
+            report,
+            widths=REPORT_WIDTHS,
+            data_rows=report_rows,
+            groups=REPORT_GROUPS,
+            single=REPORT_SINGLE,
+        ),
+        *_report_columns(report, report_rows),
     ]
-
     spreadsheet.batch_update({"requests": requests})
 
 
-def _layout(
+# --- общая разметка листа ------------------------------------------------
+
+
+def _sheet(
     worksheet: gspread.Worksheet,
     *,
-    header_row: int,
     widths: tuple[int, ...],
-    frozen: int,
+    data_rows: int,
+    groups: tuple[tuple[int, int], ...],
+    single: tuple[int, ...],
 ) -> list[dict]:
-    """Шапка, закрепление, ширины колонок и чередование строк."""
+    """Шапка, объединения, ширины, высоты, рамки и чередование строк."""
     sheet_id = worksheet.id
+    columns = len(widths)
+    last_row = HEADER_ROWS + data_rows
+
     return [
-        {
-            "repeatCell": {
-                "range": {
-                    "sheetId": sheet_id,
-                    "startRowIndex": header_row,
-                    "endRowIndex": header_row + 1,
-                    "endColumnIndex": len(widths),
+        _cells(
+            sheet_id,
+            0,
+            1,
+            0,
+            columns,
+            {
+                "backgroundColor": HEADER_COLOR,
+                "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE",
+                "wrapStrategy": "WRAP",
+                "textFormat": {
+                    "fontFamily": FONT,
+                    "fontSize": 11,
+                    "bold": True,
+                    "foregroundColor": WHITE,
                 },
-                "cell": {
-                    "userEnteredFormat": {
-                        "backgroundColor": HEADER_COLOR,
-                        "horizontalAlignment": "CENTER",
-                        "verticalAlignment": "MIDDLE",
-                        "wrapStrategy": "WRAP",
-                        "textFormat": {"bold": True, "foregroundColor": WHITE},
-                    }
+            },
+        ),
+        _cells(
+            sheet_id,
+            1,
+            HEADER_ROWS,
+            0,
+            columns,
+            {
+                "backgroundColor": HEADER_COLOR,
+                "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE",
+                "wrapStrategy": "WRAP",
+                "textFormat": {
+                    "fontFamily": FONT,
+                    "fontSize": 10,
+                    "bold": False,
+                    "foregroundColor": WHITE,
                 },
-                "fields": "userEnteredFormat",
-            }
-        },
-        {
-            "updateSheetProperties": {
-                "properties": {
-                    "sheetId": sheet_id,
-                    "gridProperties": {"frozenRowCount": frozen},
-                },
-                "fields": "gridProperties.frozenRowCount",
-            }
-        },
+            },
+        ),
+        _cells(
+            sheet_id,
+            HEADER_ROWS,
+            last_row,
+            0,
+            columns,
+            {
+                "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE",
+                "textFormat": {"fontFamily": FONT, "fontSize": 10, "bold": False},
+            },
+        ),
+        # Название товара — единственная колонка с текстом, ей нужен перенос.
+        _cells(
+            sheet_id,
+            HEADER_ROWS,
+            last_row,
+            1,
+            2,
+            {
+                "horizontalAlignment": "LEFT",
+                "verticalAlignment": "MIDDLE",
+                "wrapStrategy": "WRAP",
+            },
+        ),
+        *(_merge(sheet_id, 0, HEADER_ROWS, column, column + 1) for column in single),
+        *(_merge(sheet_id, 0, 1, first, last) for first, last in groups),
+        *_dimensions(sheet_id, widths, last_row),
+        _borders(sheet_id, 0, HEADER_ROWS, columns, bottom="SOLID_MEDIUM"),
+        _borders(sheet_id, HEADER_ROWS, last_row, columns, bottom="SOLID_MEDIUM"),
+        _banding(sheet_id, last_row, columns),
+    ]
+
+
+def _dimensions(sheet_id: int, widths: tuple[int, ...], last_row: int) -> list[dict]:
+    return [
         *(
             {
                 "updateDimensionProperties": {
@@ -112,54 +177,171 @@ def _layout(
             for index, width in enumerate(widths)
         ),
         {
-            "addBanding": {
-                "bandedRange": {
-                    "range": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": header_row,
-                        "endColumnIndex": len(widths),
-                    },
-                    "rowProperties": {
-                        "headerColor": HEADER_COLOR,
-                        "firstBandColor": WHITE,
-                        "secondBandColor": BAND_COLOR,
-                    },
-                }
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "ROWS",
+                    "startIndex": 0,
+                    "endIndex": 1,
+                },
+                "properties": {"pixelSize": HEADER_HEIGHT},
+                "fields": "pixelSize",
+            }
+        },
+        {
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "ROWS",
+                    "startIndex": 1,
+                    "endIndex": last_row,
+                },
+                "properties": {"pixelSize": ROW_HEIGHT},
+                "fields": "pixelSize",
             }
         },
     ]
 
 
-def _number_format(
-    worksheet: gspread.Worksheet,
-    columns: str,
-    pattern: str,
+# --- форматы чисел по колонкам -------------------------------------------
+
+
+def _raw_columns(worksheet: gspread.Worksheet, data_rows: int) -> list[dict]:
+    last = HEADER_ROWS + data_rows
+    sheet_id = worksheet.id
+    return [
+        _number(sheet_id, HEADER_ROWS, last, 2, 3, DATE, align="RIGHT"),
+        _number(sheet_id, HEADER_ROWS, last, 3, 6, COUNT),
+        _number(sheet_id, HEADER_ROWS, last, 6, 7, MONEY),
+        _number(sheet_id, HEADER_ROWS, last, 7, 8, COUNT),
+        _number(sheet_id, HEADER_ROWS, last, 8, 9, MONEY),
+        _number(sheet_id, HEADER_ROWS, last, 9, 10, COUNT),
+        _number(sheet_id, HEADER_ROWS, last, 10, 11, PERCENT),
+    ]
+
+
+def _report_columns(worksheet: gspread.Worksheet, data_rows: int) -> list[dict]:
+    last = HEADER_ROWS + data_rows
+    sheet_id = worksheet.id
+    return [
+        _number(sheet_id, HEADER_ROWS, last, 2, 5, COUNT),
+        _number(sheet_id, HEADER_ROWS, last, 5, 6, MONEY),
+        _number(sheet_id, HEADER_ROWS, last, 6, 7, COUNT),
+        _number(sheet_id, HEADER_ROWS, last, 7, 8, MONEY),
+        _number(sheet_id, HEADER_ROWS, last, 8, 11, PERCENT),
+        _number(sheet_id, HEADER_ROWS, last, 11, 13, MONEY),
+    ]
+
+
+# --- элементарные запросы -------------------------------------------------
+
+
+def _cells(sheet_id, first_row, last_row, first_col, last_col, fmt) -> dict:
+    return {
+        "repeatCell": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": first_row,
+                "endRowIndex": last_row,
+                "startColumnIndex": first_col,
+                "endColumnIndex": last_col,
+            },
+            "cell": {"userEnteredFormat": fmt},
+            "fields": ",".join(f"userEnteredFormat.{key}" for key in fmt),
+        }
+    }
+
+
+def _number(
+    sheet_id,
+    first_row,
+    last_row,
+    first_col,
+    last_col,
+    pattern,
     *,
-    first_row: int,
-    last_row: int | None = None,
+    align: str = "CENTER",
 ) -> dict:
-    """Формат чисел для колонок вида ``"G"`` или ``"D:F"``.
+    """Формат чисел для диапазона колонок.
 
     Группировка разрядов — только через ``#,##0``: литеральный пробел
     в паттерне не повторяется и разваливается на миллионах.
     """
-    first, _, last = columns.partition(":")
-    range_ = {
-        "sheetId": worksheet.id,
-        "startRowIndex": first_row,
-        "startColumnIndex": ord(first) - ord("A"),
-        "endColumnIndex": ord(last or first) - ord("A") + 1,
-    }
-    if last_row is not None:
-        range_["endRowIndex"] = last_row
+    return _cells(
+        sheet_id,
+        first_row,
+        last_row,
+        first_col,
+        last_col,
+        {
+            "numberFormat": {"type": "NUMBER", "pattern": pattern},
+            "horizontalAlignment": align,
+        },
+    )
+
+
+def _merge(sheet_id, first_row, last_row, first_col, last_col) -> dict:
     return {
-        "repeatCell": {
-            "range": range_,
-            "cell": {
-                "userEnteredFormat": {
-                    "numberFormat": {"type": "NUMBER", "pattern": pattern}
-                }
+        "mergeCells": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": first_row,
+                "endRowIndex": last_row,
+                "startColumnIndex": first_col,
+                "endColumnIndex": last_col,
             },
-            "fields": "userEnteredFormat.numberFormat",
+            "mergeType": "MERGE_ALL",
+        }
+    }
+
+
+def _product_merges(
+    worksheet: gspread.Worksheet, blocks: list[tuple[int, int]]
+) -> list[dict]:
+    """Склеить артикул и название по всем дням товара."""
+    return [
+        _merge(worksheet.id, start - 1, end, column, column + 1)
+        for start, end in blocks
+        for column in (0, 1)
+    ]
+
+
+def _borders(sheet_id, first_row, last_row, columns, *, bottom: str) -> dict:
+    line = {"style": "SOLID_MEDIUM"}
+    return {
+        "updateBorders": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": first_row,
+                "endRowIndex": last_row,
+                "startColumnIndex": 0,
+                "endColumnIndex": columns,
+            },
+            "top": line,
+            "bottom": {"style": bottom},
+            "left": line,
+            "right": line,
+            "innerVertical": {"style": "SOLID"},
+        }
+    }
+
+
+def _banding(sheet_id, last_row, columns) -> dict:
+    return {
+        "addBanding": {
+            "bandedRange": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 0,
+                    "endRowIndex": last_row,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": columns,
+                },
+                "rowProperties": {
+                    "headerColor": HEADER_COLOR,
+                    "firstBandColor": WHITE,
+                    "secondBandColor": BAND_COLOR,
+                },
+            }
         }
     }
